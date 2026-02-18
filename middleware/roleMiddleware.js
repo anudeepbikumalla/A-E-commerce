@@ -7,7 +7,7 @@ const allowRoles = (...roles) => {
       });
     }
 
-    if (req.user.role === 'root') {
+    if (roles.includes(req.user.role)) {
       return next();
     }
 
