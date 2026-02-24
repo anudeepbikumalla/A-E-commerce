@@ -91,7 +91,7 @@ exports.createOrder = async (req, res) => {
         const updated = await Product.findOneAndUpdate(
           { _id: productId, stock: { $gte: totalRequestedQty } },
           { $inc: { stock: -totalRequestedQty } },
-          { new: false, session }
+          { returnDocument: 'before', session }
         );
         if (!updated) {
           throw Object.assign(
@@ -155,7 +155,11 @@ exports.updateOrder = async (req, res) => {
       });
     }
 
-    const order = await Order.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true })
+    const order = await Order.findByIdAndUpdate(
+      req.params.id,
+      req.body,
+      { returnDocument: 'after', runValidators: true }
+    )
       .populate('user', '-password')
       .populate('products.product');
 
@@ -227,7 +231,7 @@ exports.updateOrderStatus = async (req, res) => {
     const order = await Order.findByIdAndUpdate(
       req.params.id,
       { status },
-      { new: true, runValidators: true }
+      { returnDocument: 'after', runValidators: true }
     );
     if (!order) {
       return res.status(404).json({ success: false, message: 'Order not found' });

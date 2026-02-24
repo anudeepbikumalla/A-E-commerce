@@ -172,7 +172,7 @@ exports.updateUser = async (req, res) => {
     const updatedUser = await User.findByIdAndUpdate(
       targetUserId,
       req.body,
-      { new: true, runValidators: true }
+      { returnDocument: 'after', runValidators: true }
     ).select('-password');
 
     res.status(200).json({

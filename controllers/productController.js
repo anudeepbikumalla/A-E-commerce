@@ -83,7 +83,11 @@ exports.updateProduct = async (req, res) => {
     if (req.body.createdBy) delete req.body.createdBy;
     req.body.updatedBy = req.user._id;
 
-    const updatedProduct = await Product.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true });
+    const updatedProduct = await Product.findByIdAndUpdate(
+      req.params.id,
+      req.body,
+      { returnDocument: 'after', runValidators: true }
+    );
     res.status(200).json({ success: true, data: updatedProduct, message: 'Product updated successfully' });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
