@@ -188,7 +188,7 @@ exports.updateUser = async (req, res) => {
 // Change password for self or admin-level users.
 exports.simplePasswordUpdate = async (req, res) => {
   try {
-    const { newPassword } = req.body;
+    const { currentPassword, newPassword } = req.body;
     const targetUserId = req.params.id;
 
     const isOwner = req.user.id === targetUserId;
@@ -204,6 +204,13 @@ exports.simplePasswordUpdate = async (req, res) => {
     const user = await User.findById(targetUserId);
     if (!user) {
       return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    if (isOwner) {
+      const isMatch = await bcryptjs.compare(currentPassword, user.password);
+      if (!isMatch) {
+        return res.status(401).json({ success: false, message: 'Current password is incorrect.' });
+      }
     }
 
     user.password = newPassword;
