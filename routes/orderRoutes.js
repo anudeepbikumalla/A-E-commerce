@@ -6,8 +6,8 @@ const { checkPermission } = require('../middleware/permissionMiddleware');
 const validateObjectId = require('../middleware/validateObjectId');
 
 // Read orders based on role permissions.
-router.get('/', authMiddleware, checkPermission('read_orders', 'read_assigned_orders', 'read_own_orders', 'place_orders'), orderController.getAllOrders);
-router.get('/:id', authMiddleware, validateObjectId('id'), checkPermission('read_orders', 'read_own_orders', 'place_orders'), orderController.getOrderById);
+router.get('/', authMiddleware, checkPermission('read_orders', 'read_assigned_orders', 'read_own_orders', 'place_orders', 'manage_orders'), orderController.getAllOrders);
+router.get('/:id', authMiddleware, validateObjectId('id'), checkPermission('read_orders', 'read_own_orders', 'place_orders', 'manage_orders'), orderController.getOrderById);
 
 // Place a new order.
 router.post('/', authMiddleware, checkPermission('place_orders'), orderController.createOrder);
