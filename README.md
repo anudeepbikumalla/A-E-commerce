@@ -1,6 +1,6 @@
 # A-E-commerce API
 
-A role-based backend API for an e-commerce workflow built with Node.js, Express, MongoDB (Mongoose), and JWT authentication.
+A backend API for e-commerce workflows built with Node.js, Express, MongoDB, and JWT auth.
 
 ## Tech Stack
 - Node.js (CommonJS)
@@ -8,90 +8,175 @@ A role-based backend API for an e-commerce workflow built with Node.js, Express,
 - MongoDB + Mongoose
 - JWT (`jsonwebtoken`)
 - Password hashing (`bcryptjs`)
-- Postman collection/environment for manual API testing
+- Node test runner (`node:test`)
 
 ## Project Structure
 - `server.js`: app bootstrap, middleware, route mounting, error handler, server start
 - `config/dbConfig.js`: MongoDB connection
-- `routes/*.js`: endpoint declarations + middleware chaining
+- `config/rolesConfig.js`: role hierarchy with rank + permissions
+- `routes/*.js`: endpoint declarations and middleware chaining
 - `middleware/authMiddleware.js`: JWT verification and user hydration (`req.user`)
 - `middleware/permissionMiddleware.js`: permission guard (`checkPermission(...)`)
-- `middleware/validateObjectId.js`: request parameter validation for ObjectId routes
-- `utils/rbac.js`: shared role rank and permission helpers
-- `controllers/*.js`: business logic and response shaping
-- `models/*.js`: schema definitions and persistence contracts
-- `A-E-commerce.postman_collection.json`: API test collection
-- `A-E-commerce.postman_environment.json`: environment variables for Postman
+- `middleware/validateObjectId.js`: ObjectId validation for route params
+- `middleware/validateBody.js`: request body validation for auth/user/product/order endpoints
+- `utils/rbac.js`: shared role rank + permission helpers
+- `controllers/*.js`: business logic
+- `models/*.js`: schema definitions
+- `tests/rbac.integration.test.js`: integration smoke test for RBAC/auth/order flows
 
-## Architectural Approach
-This project follows a layered and modular architecture:
+## Architecture (High Level)
+The API uses a layered flow:
 
-1. Entry Layer: HTTP request enters Express app.
-2. Routing Layer: route file maps URL + method to controller.
-3. Security Layer: authentication middleware validates JWT, authorization middleware enforces role access.
-4. Business Layer: controller handles use-case logic.
-5. Data Layer: Mongoose model validates and persists data.
-6. Response Layer: structured JSON response sent back to client.
+1. Request enters Express app.
+2. Route matches endpoint.
+3. Middleware stack runs:
+   - input validation
+   - authentication
+   - authorization
+4. Controller executes business logic.
+5. Model layer validates/persists data.
+6. API returns JSON response.
 
-This separation improves maintainability, testability, and security control.
+## End-to-End Feature Flows
 
-## End-to-End Request Flow
-Example for a protected route (`PUT /api/products/:id`):
+### 1. Signup and Login
 
-1. Client sends request with `Authorization: Bearer <token>`.
-2. `authMiddleware` verifies token and loads current user from DB.
-3. `checkPermission(...)` validates whether the authenticated role has required permissions.
-4. Controller (`updateProduct`) performs update and attaches metadata (`updatedBy`).
-5. Mongoose enforces schema constraints and writes to MongoDB.
-6. API returns a consistent success/failure JSON response.
+Signup (`POST /api/users`):
+1. Request body is validated (`name`, `email`, `password`).
+2. Controller checks if user already exists.
+3. User is created with default role `user`.
+4. Password is hashed by `User` model pre-save hook.
+5. API returns created user (without password).
 
-## Development Strategy (How the code was built)
-The codebase was developed in iterative layers:
+Login (`POST /api/users/login`):
+1. Request body is validated (`email`, `password`).
+2. Controller finds user by email.
+3. Password is compared with hashed password.
+4. JWT is generated with `{ id, role }`.
+5. API returns token + basic user info.
 
-1. Base setup:
-- Initialized Express app and MongoDB connectivity.
-- Added common middleware (`json`, `urlencoded`) and route aggregator.
+### 2. Authentication (Protected Routes)
 
-2. Domain modeling:
-- Created core entities: `User`, `Product`, `Order`.
-- Added schema-level constraints (required fields, enums, min values).
+For protected routes:
+1. `authMiddleware` checks `Authorization: Bearer <token>`.
+2. JWT is verified with `JWT_SECRET`.
+3. User is loaded from DB and attached to `req.user`.
+4. If token/user invalid, request is rejected with `401`.
 
-3. Authentication and identity:
-- Added user signup/login.
-- Introduced password hashing via pre-save hook.
-- Issued JWT on login.
+### 3. Authorization (RBAC)
 
-4. Authorization (RBAC):
-- Implemented `checkPermission(...)` middleware for route-level permission checks.
-- Reused `utils/rbac.js` in middleware/controllers for consistent role rank and permission rules.
+Authorization uses permissions from `rolesConfig`:
+1. Route applies `checkPermission('permA', 'permB', ...)`.
+2. Middleware loads role config from `utils/rbac`.
+3. Access is granted if role has any required permission.
+4. `root` has `all` permission and bypasses checks.
+5. Controllers also enforce resource-level rules (ownership/hierarchy).
 
-5. Feature endpoints:
-- Users: CRUD-like operations + password update flow.
-- Products: public reads + restricted writes.
-- Orders: create, retrieve, update, delete with owner/admin checks.
+### 4. User Profile and User Management
 
-6. API testing workflow:
-- Added Postman collection with role-specific login flows.
-- Auto-captured tokens into environment variables (`token_user`, `token_admin`, `token_root`).
-- Included positive and negative access test cases.
+Get profile (`GET /api/users/:id`):
+1. Auth + permission middleware runs.
+2. Controller allows:
+   - owner access, or
+   - roles with `read_users/manage_users`.
+3. Password is excluded from response.
 
-## RBAC Summary (Current Behavior)
-Note: Current behavior is based on permission middleware plus controller-level ownership/rank checks.
+Update user (`PUT /api/users/:id`):
+1. Body and ObjectId are validated.
+2. Controller applies hierarchy checks by role rank.
+3. Role assignment allowed only for roles with `assign_roles`.
+4. Self role-change is blocked.
+5. Password updates are blocked in this endpoint.
 
-Users:
-- `GET /api/users`: admin only
-- `GET /api/users/:id`: authenticated user (current implementation)
-- `PUT /api/users/:id`: owner or admin/root (controller check)
-- `DELETE /api/users/:id`: admin or root
+Delete user (`DELETE /api/users/:id`):
+1. Auth + permission + ObjectId validation.
+2. Controller checks requester rank > target rank (except root).
+3. Target user is deleted if authorized.
 
-Products:
-- Public read (`GET` list and by id)
-- Create/Update: admin, manager
-- Delete: admin
+### 5. Password Update (Authenticated User/Admin)
 
-Orders:
-- Route access: admin, manager, user
-- Controller ownership constraints decide whether user can view/edit specific orders
+Endpoint: `POST /api/users/update-password/:id`
+
+1. Body is validated (`newPassword`; `currentPassword` required for self-change).
+2. Controller allows:
+   - self update, or
+   - admin/superuser/root reset.
+3. For self update, current password must match.
+4. New password is saved and hashed by model hook.
+
+### 6. Forgot/Reset Password (Public Flow)
+
+Forgot password (`POST /api/users/forgot-password`):
+1. Body is validated (`email`).
+2. If account exists, system generates random reset token.
+3. Only hashed token is stored in `tokens` collection with expiry.
+4. Existing reset tokens for that user are cleared.
+5. API returns success.
+
+Reset password (`POST /api/users/reset-password`):
+1. Body is validated (`token`, `newPassword`).
+2. Incoming token is hashed and matched against non-expired stored token.
+3. Matching user password is updated (hashed on save).
+4. User reset tokens are deleted (one-time use).
+5. User can now login with new password.
+
+Note: In this simple setup, reset token is returned in API response for testing. In production, send token via email/SMS and do not return it in API response.
+
+### 7. Product Management
+
+Public reads:
+- `GET /api/products`
+- `GET /api/products/:id`
+
+Protected writes:
+- `POST /api/products`
+- `PUT /api/products/:id`
+- `DELETE /api/products/:id`
+
+Write flow:
+1. Body/ObjectId validation.
+2. Auth + permission check.
+3. Controller enforces ownership or elevated permission.
+4. `createdBy` cannot be overwritten in update.
+5. `updatedBy` is set from logged-in user.
+
+### 8. Order Management
+
+List/get orders:
+- `GET /api/orders`
+- `GET /api/orders/:id`
+
+Behavior:
+1. Auth + permission check.
+2. Controller returns all orders for roles with global read/manage permissions.
+3. Other users can access only their own orders.
+
+Create order (`POST /api/orders`):
+1. Body validation (`products`, `shippingAddress`).
+2. Transaction starts.
+3. Product stock is checked and decremented atomically.
+4. Order total is calculated from DB prices.
+5. Order is created and transaction commits.
+6. If stock is insufficient, request fails with conflict.
+
+Update order (`PUT /api/orders/:id`):
+- Allowed only for roles with `manage_orders`.
+
+Update order status (`PUT /api/orders/:id/status`):
+1. Status value is validated.
+2. Delivery role can set only `delivered`.
+3. Status field is updated.
+
+Delete order (`DELETE /api/orders/:id`):
+- Allowed for `manage_orders` roles, or owner fallback where applicable.
+
+### 9. Validation Layer
+
+Validation middleware protects routes before business logic:
+- `validateObjectId`: checks route params like `:id`.
+- `validateBody`: checks required fields/types for auth/user/product/order requests.
+
+This reduces controller complexity and returns early `400` on invalid input.
 
 ## API Base URL
 - `http://localhost:3000/api`
@@ -112,39 +197,42 @@ npm install
 npm start
 ```
 
-## Postman Usage
-1. Import `A-E-commerce.postman_collection.json`.
-2. Import `A-E-commerce.postman_environment.json`.
-3. Select environment.
-4. Run login requests first to fill tokens.
-5. Use protected endpoints with generated tokens.
+## Testing
+Run all tests:
+```bash
+npm test
+```
 
-## Design Decisions
-- JWT chosen for stateless auth and simpler scaling.
-- Route-level RBAC selected for explicit, readable access control near endpoints.
-- Controllers keep business rules centralized and independent from routing concerns.
-- Mongoose used for schema validation and query ergonomics.
+Run RBAC integration smoke test only:
+```bash
+npm run test:rbac
+```
 
-## What Is Intentionally Kept for Next Iterations
-- Development-only helper endpoint(s) can be gated/removed in production hardening phase.
-- `models/tokens.js` is present for future token lifecycle features (revocation/blacklist/reset/invite workflows).
+Current integration test covers:
+- owner vs non-owner profile access
+- role-based order access
+- delivery status restrictions
+- product ownership restrictions
+- password change guardrails
+- forgot/reset password flow
 
-## Review Backlog (Your Next Pass: Items 2-7)
-Planned follow-up review areas:
+## Security Notes
+- Passwords are always stored as hashes.
+- API never has a "find password" endpoint.
+- Reset tokens are stored as hashes with expiry.
+- RBAC is permission-based and centralized.
 
-1. Access control refinement for profile-level data access.
-2. RBAC consistency between routes/controllers/policy source.
-3. Order schema timestamp strategy (`updatedAt` automation).
-4. Dead code/utilities cleanup where truly unused.
-5. Dependency hygiene (`devDependencies` vs `dependencies`).
-6. Commented legacy block cleanup for maintainability.
+## Production Notes
+- Do not return `resetToken` in `forgot-password` response in production.
+- Deliver reset links/tokens through email or SMS provider.
+- Add rate limiting for login, forgot-password, and reset-password endpoints.
+- Add audit logging for role changes, password resets, and user deletion actions.
 
-## Suggested Next Improvements
-1. Introduce request validation middleware (Joi/Zod/express-validator).
-2. Add integration tests for auth + RBAC edge cases.
-3. Add security middleware (`helmet`, rate-limiting, CORS policy tightening).
-4. Standardize API error contract with central error utilities.
-5. Add service layer if business logic grows beyond controller scope.
+## Known Limitations
+- External email/SMS delivery is not integrated yet for password reset.
+- Token/session revocation flow is not implemented yet (future enhancement).
+- Current integration tests are smoke-level, not a full endpoint matrix.
 
-## Notes
-This README documents both current implementation and the intended evolution path, so contributors understand what is production-ready today and what is staged for upcoming iterations.
+## Postman
+- Collection: `A-E-commerce.postman_collection.json`
+- Environment: `A-E-commerce.postman_environment.json`
