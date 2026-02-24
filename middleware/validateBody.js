@@ -10,6 +10,25 @@ const validateLoginBody = (req, res, next) => {
   return next();
 };
 
+const validateForgotPasswordBody = (req, res, next) => {
+  const { email } = req.body || {};
+  if (!isNonEmptyString(email)) {
+    return fail(res, 'Email is required.');
+  }
+  return next();
+};
+
+const validateResetPasswordBody = (req, res, next) => {
+  const { token, newPassword } = req.body || {};
+  if (!isNonEmptyString(token)) {
+    return fail(res, 'Reset token is required.');
+  }
+  if (!isNonEmptyString(newPassword) || newPassword.length < 6) {
+    return fail(res, 'newPassword must be at least 6 characters.');
+  }
+  return next();
+};
+
 const validateCreateUserBody = (req, res, next) => {
   const { name, email, password } = req.body || {};
   if (!isNonEmptyString(name)) return fail(res, 'Name is required.');
@@ -98,6 +117,8 @@ const validateOrderStatusBody = (req, res, next) => {
 
 module.exports = {
   validateLoginBody,
+  validateForgotPasswordBody,
+  validateResetPasswordBody,
   validateCreateUserBody,
   validateUpdateUserBody,
   validatePasswordUpdateBody,

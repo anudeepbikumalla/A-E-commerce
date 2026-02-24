@@ -170,6 +170,22 @@ test('RBAC integration smoke', async (t) => {
   });
   assert.equal(mePasswordPass.status, 200);
 
+  const forgot = await request(baseUrl, 'POST', '/users/forgot-password', {
+    body: { email: user2Email }
+  });
+  assert.equal(forgot.status, 200);
+  assert.ok(forgot.data.resetToken);
+
+  const reset = await request(baseUrl, 'POST', '/users/reset-password', {
+    body: { token: forgot.data.resetToken, newPassword: 'ResetPass123!' }
+  });
+  assert.equal(reset.status, 200);
+
+  const loginAfterReset = await request(baseUrl, 'POST', '/users/login', {
+    body: { email: user2Email, password: 'ResetPass123!' }
+  });
+  assert.equal(loginAfterReset.status, 200);
+
   await new Promise((resolve) => server.close(resolve));
   await mongoose.connection.close();
 

@@ -4,11 +4,20 @@ const userController = require("../controllers/userController");
 const authMiddleware = require("../middleware/authMiddleware");
 const { checkPermission } = require("../middleware/permissionMiddleware"); 
 const validateObjectId = require('../middleware/validateObjectId');
-const { validateLoginBody, validateCreateUserBody, validateUpdateUserBody, validatePasswordUpdateBody } = require('../middleware/validateBody');
+const {
+  validateLoginBody,
+  validateForgotPasswordBody,
+  validateResetPasswordBody,
+  validateCreateUserBody,
+  validateUpdateUserBody,
+  validatePasswordUpdateBody
+} = require('../middleware/validateBody');
 
 // Public auth routes.
 router.post("/", validateCreateUserBody, userController.createUser);
 router.post("/login", validateLoginBody, userController.loginUser);
+router.post("/forgot-password", validateForgotPasswordBody, userController.forgotPassword);
+router.post("/reset-password", validateResetPasswordBody, userController.resetPassword);
 
 // Profile routes (authenticated + permission checked).
 router.get("/:id", authMiddleware, validateObjectId('id'), checkPermission('manage_own_profile', 'manage_users', 'read_users'), userController.getUserById);

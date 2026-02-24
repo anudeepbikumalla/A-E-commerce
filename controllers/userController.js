@@ -1,6 +1,8 @@
 const User = require('../models/User');
 const jwt = require('jsonwebtoken');
 const bcryptjs = require('bcryptjs');
+const crypto = require('crypto');
+const Token = require('../models/tokens');
 const { getRoleRank, hasPermission, hasAnyPermission } = require('../utils/rbac');
 
 // Login endpoint.
@@ -38,6 +40,73 @@ exports.loginUser = async (req, res) => {
         role: user.role
       }
     });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// Forgot password endpoint.
+// Creates a short-lived reset token and stores only its hash in DB.
+exports.forgotPassword = async (req, res) => {
+  try {
+    const { email } = req.body;
+    const user = await User.findOne({ email });
+
+    // Return generic success even when user is missing to avoid account enumeration.
+    if (!user) {
+      return res.status(200).json({
+        success: true,
+        message: 'If the account exists, a reset token has been generated.'
+      });
+    }
+
+    const rawToken = crypto.randomBytes(32).toString('hex');
+    const hashedToken = crypto.createHash('sha256').update(rawToken).digest('hex');
+
+    await Token.deleteMany({ user: user._id });
+    await Token.create({
+      user: user._id,
+      token: hashedToken,
+      expiresAt: new Date(Date.now() + 15 * 60 * 1000)
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Password reset token generated.',
+      resetToken: rawToken
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// Reset password endpoint.
+// Verifies reset token and updates user password.
+exports.resetPassword = async (req, res) => {
+  try {
+    const { token, newPassword } = req.body;
+    const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
+
+    const tokenDoc = await Token.findOne({
+      token: hashedToken,
+      expiresAt: { $gt: new Date() }
+    });
+
+    if (!tokenDoc) {
+      return res.status(400).json({ success: false, message: 'Invalid or expired reset token.' });
+    }
+
+    const user = await User.findById(tokenDoc.user);
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found.' });
+    }
+
+    user.password = newPassword;
+    await user.save();
+
+    await Token.deleteMany({ user: user._id });
+
+    res.status(200).json({ success: true, message: 'Password reset successfully.' });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
