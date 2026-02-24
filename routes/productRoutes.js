@@ -2,19 +2,18 @@ const express = require('express');
 const router = express.Router();
 const productController = require('../controllers/productController');
 const authMiddleware = require('../middleware/authMiddleware');
-const { allowRoles } = require('../middleware/roleMiddleware'); // Import this!
+const { checkPermission } = require('../middleware/permissionMiddleware');
+const validateObjectId = require('../middleware/validateObjectId');
 
-// Everyone can see products
+// Public product listing endpoints.
 router.get('/', productController.getAllProducts);
-router.get('/:id', productController.getProductById);
+router.get('/:id', validateObjectId('id'), productController.getProductById);
 
-// Only Admin/Manager can Create/Edit
-router.post('/', authMiddleware, allowRoles('admin', 'manager'), productController.createProduct);
-router.put('/:id', authMiddleware, allowRoles('admin', 'manager'), productController.updateProduct);
+// Create product for roles with product creation/management permissions.
+router.post('/', authMiddleware, checkPermission('manage_products', 'create_product'), productController.createProduct);
 
-// Only Admin can Delete
-router.delete('/:id', authMiddleware, allowRoles('admin'), productController.deleteProduct);
+// Update and delete based on management or ownership permissions.
+router.put('/:id', authMiddleware, validateObjectId('id'), checkPermission('manage_products', 'manage_own_products'), productController.updateProduct);
+router.delete('/:id', authMiddleware, validateObjectId('id'), checkPermission('manage_products', 'manage_own_products'), productController.deleteProduct);
 
 module.exports = router;
-
-

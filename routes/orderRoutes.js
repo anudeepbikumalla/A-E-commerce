@@ -2,21 +2,21 @@ const express = require('express');
 const router = express.Router();
 const orderController = require('../controllers/orderController');
 const authMiddleware = require('../middleware/authMiddleware');
-const { allowRoles } = require('../middleware/roleMiddleware');
+const { checkPermission } = require('../middleware/permissionMiddleware');
+const validateObjectId = require('../middleware/validateObjectId');
 
-// Admin sees all, User sees their own (handled in controller)
-router.get('/', authMiddleware, allowRoles('admin', 'manager', 'user'), orderController.getAllOrders);
-router.get('/:id', authMiddleware, allowRoles('admin', 'manager', 'user'), orderController.getOrderById);
+// Read orders based on role permissions.
+router.get('/', authMiddleware, checkPermission('read_orders', 'read_assigned_orders', 'read_own_orders', 'place_orders'), orderController.getAllOrders);
+router.get('/:id', authMiddleware, validateObjectId('id'), checkPermission('read_orders', 'read_own_orders', 'place_orders'), orderController.getOrderById);
 
-// Anyone logged in can create an order
-router.post('/', authMiddleware, allowRoles('user', 'admin', 'manager'), orderController.createOrder);
+// Place a new order.
+router.post('/', authMiddleware, checkPermission('place_orders'), orderController.createOrder);
 
-// Only Admin/Manager can update status (e.g. "Shipped")
-router.put('/:id', authMiddleware, allowRoles('admin', 'manager'), orderController.updateOrder);
+// Full update and status-only update are separated for better control.
+router.put('/:id', authMiddleware, validateObjectId('id'), checkPermission('manage_orders'), orderController.updateOrder);
+router.put('/:id/status', authMiddleware, validateObjectId('id'), checkPermission('update_order_status', 'manage_orders'), orderController.updateOrderStatus);
 
-// Admin can delete, User can maybe cancel (delete) pending orders?
-router.delete('/:id', authMiddleware, allowRoles('admin', 'user'), orderController.deleteOrder);
+// Delete allowed by permission rules (manage orders or own order flow).
+router.delete('/:id', authMiddleware, validateObjectId('id'), checkPermission('manage_orders', 'place_orders'), orderController.deleteOrder);
 
 module.exports = router;
-
-
