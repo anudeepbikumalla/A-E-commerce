@@ -21,7 +21,19 @@ const userSchema = new mongoose.Schema({
   },
   role: {
     type: String,
-    enum: ['user', 'manager', 'admin', 'superuser', 'root'],
+    enum: [
+      'user',      // Regular customer.
+      'support',   // Support team member.
+      'delivery',  // Delivery staff.
+      'vendor',    // Third-party seller.
+      'marketing', // Marketing team.
+      'sales',     // Sales team.
+      'manager',   // Operations manager.
+      'editor',    // Content editor.
+      'admin',     // Administrator.
+      'superuser', // Senior administrator.
+      'root'       // Highest privilege.
+    ],
     default: 'user'
   },
   phone: {
@@ -31,18 +43,18 @@ const userSchema = new mongoose.Schema({
     type: String
   },
   updatedBy: {
-  type: mongoose.Schema.Types.ObjectId,
-  ref: "User"
-}
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  }
 }, { timestamps: true });
 
-// Password hashing before saving
-userSchema.pre('save', async function() {
+// Hash password before saving when it has changed.
+userSchema.pre('save', async function () {
   if (!this.isModified('password')) return;
+
   try {
     const salt = await bcryptjs.genSalt(10);
     this.password = await bcryptjs.hash(this.password, salt);
-  
   } catch (error) {
     throw error;
   }

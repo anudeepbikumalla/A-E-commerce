@@ -5,7 +5,7 @@ const orderRoutes = require('./orderRoutes');
 
 const allRoutes = express.Router();
 
-// Use the routes here
+// Register route modules.
 allRoutes.use('/products', productRoutes);
 allRoutes.use('/users', userRoutes);
 allRoutes.use('/orders', orderRoutes);
