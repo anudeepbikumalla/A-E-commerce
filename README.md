@@ -13,10 +13,11 @@ A role-based backend API for an e-commerce workflow built with Node.js, Express,
 ## Project Structure
 - `server.js`: app bootstrap, middleware, route mounting, error handler, server start
 - `config/dbConfig.js`: MongoDB connection
-- `config/accessConfig.js`: alternative/central RBAC policy approach (kept intentionally for next phase)
 - `routes/*.js`: endpoint declarations + middleware chaining
 - `middleware/authMiddleware.js`: JWT verification and user hydration (`req.user`)
-- `middleware/roleMiddleware.js`: role guard (`allowRoles(...)`)
+- `middleware/permissionMiddleware.js`: permission guard (`checkPermission(...)`)
+- `middleware/validateObjectId.js`: request parameter validation for ObjectId routes
+- `utils/rbac.js`: shared role rank and permission helpers
 - `controllers/*.js`: business logic and response shaping
 - `models/*.js`: schema definitions and persistence contracts
 - `A-E-commerce.postman_collection.json`: API test collection
@@ -39,7 +40,7 @@ Example for a protected route (`PUT /api/products/:id`):
 
 1. Client sends request with `Authorization: Bearer <token>`.
 2. `authMiddleware` verifies token and loads current user from DB.
-3. `allowRoles('admin', 'manager')` checks whether role is permitted.
+3. `checkPermission(...)` validates whether the authenticated role has required permissions.
 4. Controller (`updateProduct`) performs update and attaches metadata (`updatedBy`).
 5. Mongoose enforces schema constraints and writes to MongoDB.
 6. API returns a consistent success/failure JSON response.
@@ -61,8 +62,8 @@ The codebase was developed in iterative layers:
 - Issued JWT on login.
 
 4. Authorization (RBAC):
-- Implemented `allowRoles(...)` middleware for route-level role guards.
-- Applied role guards differently per resource operation.
+- Implemented `checkPermission(...)` middleware for route-level permission checks.
+- Reused `utils/rbac.js` in middleware/controllers for consistent role rank and permission rules.
 
 5. Feature endpoints:
 - Users: CRUD-like operations + password update flow.
@@ -75,7 +76,7 @@ The codebase was developed in iterative layers:
 - Included positive and negative access test cases.
 
 ## RBAC Summary (Current Behavior)
-Note: Current behavior is based on hardcoded `allowRoles(...)` usage in routes and controller-level ownership checks.
+Note: Current behavior is based on permission middleware plus controller-level ownership/rank checks.
 
 Users:
 - `GET /api/users`: admin only
@@ -125,7 +126,6 @@ npm start
 - Mongoose used for schema validation and query ergonomics.
 
 ## What Is Intentionally Kept for Next Iterations
-- `config/accessConfig.js` is intentionally retained as a second RBAC approach (policy centralization).
 - Development-only helper endpoint(s) can be gated/removed in production hardening phase.
 - `models/tokens.js` is present for future token lifecycle features (revocation/blacklist/reset/invite workflows).
 
