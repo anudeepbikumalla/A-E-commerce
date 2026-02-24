@@ -1,5 +1,6 @@
 const Order = require('../models/Order');
 const Product = require('../models/Product');
+const mongoose = require('mongoose');
 const { hasPermission, hasAnyPermission } = require('../utils/rbac');
 
 // Get orders list.
@@ -62,58 +63,64 @@ exports.getOrderById = async (req, res) => {
 // Create a new order.
 // Total amount is calculated from current product prices in the database.
 exports.createOrder = async (req, res) => {
+  const session = await mongoose.startSession();
   try {
     const { products, shippingAddress } = req.body;
-
-    if (!products || products.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Order must contain at least one product'
-      });
-    }
-
     const user = req.user._id;
     let totalAmount = 0;
     const orderProducts = [];
+    let createdOrderId = null;
 
-    const productIds = [...new Set(products.map((item) => String(item.product)))];
-    const dbProducts = await Product.find({ _id: { $in: productIds } });
-    const productMap = new Map(dbProducts.map((product) => [String(product._id), product]));
+    await session.withTransaction(async () => {
+      const requestedQtyByProduct = new Map();
+      for (const item of products) {
+        const key = String(item.product);
+        requestedQtyByProduct.set(key, (requestedQtyByProduct.get(key) || 0) + item.quantity);
+      }
 
-    for (const item of products) {
-      // Validate quantity for each product line.
-      if (!item.quantity || item.quantity < 1) {
-        return res.status(400).json({
-          success: false,
-          message: 'Each product must have a valid quantity'
+      const productIds = [...requestedQtyByProduct.keys()];
+      const dbProducts = await Product.find({ _id: { $in: productIds } }).session(session);
+      const productMap = new Map(dbProducts.map((product) => [String(product._id), product]));
+
+      for (const [productId, totalRequestedQty] of requestedQtyByProduct.entries()) {
+        const existing = productMap.get(productId);
+        if (!existing) {
+          throw Object.assign(new Error(`Product ${productId} not found`), { statusCode: 404 });
+        }
+
+        const updated = await Product.findOneAndUpdate(
+          { _id: productId, stock: { $gte: totalRequestedQty } },
+          { $inc: { stock: -totalRequestedQty } },
+          { new: false, session }
+        );
+        if (!updated) {
+          throw Object.assign(
+            new Error(`Insufficient stock for product ${productId}`),
+            { statusCode: 409 }
+          );
+        }
+      }
+
+      for (const item of products) {
+        const product = productMap.get(String(item.product));
+        totalAmount += product.price * item.quantity;
+        orderProducts.push({
+          product: product._id,
+          quantity: item.quantity,
+          price: product.price
         });
       }
 
-      const product = productMap.get(String(item.product));
-      if (!product) {
-        return res.status(404).json({
-          success: false,
-          message: `Product ${item.product} not found`
-        });
-      }
-
-      // Save price snapshot in order to keep history stable.
-      totalAmount += product.price * item.quantity;
-      orderProducts.push({
-        product: product._id,
-        quantity: item.quantity,
-        price: product.price
-      });
-    }
-
-    const order = new Order({
-      user,
-      products: orderProducts,
-      totalAmount,
-      shippingAddress
+      const [saved] = await Order.create([{
+        user,
+        products: orderProducts,
+        totalAmount,
+        shippingAddress
+      }], { session });
+      createdOrderId = saved._id;
     });
 
-    const savedOrder = await order.save();
+    const savedOrder = await Order.findById(createdOrderId);
     await savedOrder.populate('user', '-password');
     await savedOrder.populate('products.product');
 
@@ -123,10 +130,12 @@ exports.createOrder = async (req, res) => {
       message: 'Order created successfully'
     });
   } catch (error) {
-    res.status(400).json({
+    res.status(error.statusCode || 400).json({
       success: false,
       message: error.message
     });
+  } finally {
+    await session.endSession();
   }
 };
 
