@@ -1,30 +1,28 @@
 const User = require('../models/User');
 const jwt = require('jsonwebtoken');
 const bcryptjs = require('bcryptjs');
+const { getRoleRank, hasPermission, hasAnyPermission } = require('../utils/rbac');
 
-// 1. LOGIN USER
+// Login endpoint.
+// Validates credentials and returns JWT + basic user data.
 exports.loginUser = async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    // Early validation
     if (!email || !password) {
-      return res.status(400).json({ success: false, message: "Please provide email and password" });
+      return res.status(400).json({ success: false, message: 'Please provide email and password' });
     }
 
-    // Check if user exists
     const user = await User.findOne({ email });
     if (!user) {
-      return res.status(401).json({ success: false, message: "Invalid email Credentials" });
+      return res.status(401).json({ success: false, message: 'Invalid email credentials' });
     }
 
-    // Compare Password
     const isMatch = await bcryptjs.compare(password, user.password);
     if (!isMatch) {
-      return res.status(401).json({ success: false, message: "Invalid pass Credentials" });
+      return res.status(401).json({ success: false, message: 'Invalid password credentials' });
     }
 
-    // Create Token
     const token = jwt.sign(
       { id: user._id, role: user.role },
       process.env.JWT_SECRET,
@@ -45,48 +43,21 @@ exports.loginUser = async (req, res) => {
   }
 };
 
-
-
-exports.findpassword = async (req, res) => {
-  try {
-    const { email } = req.body;   
-    // Check if user exists
-    const user = await User.findOne({ email });
-    if (!user) {
-      return res.status(401).json({ success: false, message: "Invalid email Credentials" });
-    }   
-
-    res.status(200).json({
-      success: true,
-      user: {
-        id: user._id,
-        name: user.name,
-        role: user.role,    
-        password: user.password
-      }
-    });
-  }   
-  catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-
-// 2. CREATE NEW USER (Signup)
+// Create user (signup).
+// New users always start with "user" role from this endpoint.
 exports.createUser = async (req, res) => {
   try {
     const { name, email, password } = req.body;
     const role = 'user';
-    
-    // Check if user already exists
+
     const existingUser = await User.findOne({ email });
     if (existingUser) {
-        return res.status(400).json({ success: false, message: "User already exists" });
+      return res.status(400).json({ success: false, message: 'User already exists' });
     }
 
     const user = new User({ name, email, password, role });
     const savedUser = await user.save();
-    
+
     res.status(201).json({
       success: true,
       data: {
@@ -102,7 +73,7 @@ exports.createUser = async (req, res) => {
   }
 };
 
-// 3. GET ALL USERS
+// Get all users without password field.
 exports.getAllUsers = async (req, res) => {
   try {
     const users = await User.find().select('-password');
@@ -112,299 +83,161 @@ exports.getAllUsers = async (req, res) => {
   }
 };
 
-// 4. GET USER BY ID
+// Get one user by id without password field.
 exports.getUserById = async (req, res) => {
   try {
+    const targetUserId = req.params.id;
+    const isOwner = req.user.id === targetUserId;
+    const canReadAnyProfile = hasAnyPermission(req.user.role, ['read_users', 'manage_users']);
+
+    if (!isOwner && !canReadAnyProfile) {
+      return res.status(403).json({ success: false, message: 'Access denied' });
+    }
+
     const user = await User.findById(req.params.id).select('-password');
     if (!user) {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
+
     res.status(200).json({ success: true, data: user });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
 };
 
-// 5. UPDATE USER
+// Update user profile with role hierarchy checks.
+// This endpoint supports profile edits and controlled role assignment.
 exports.updateUser = async (req, res) => {
   try {
     if (!req.user) {
       return res.status(401).json({ success: false, message: 'User not authenticated' });
     }
-    const isOwner = req.user.id === req.params.id;
-    const isAdmin = req.user.role === 'admin' || req.user.role === 'root';
-    if (!isOwner && !isAdmin) {
-      return res.status(403).json({ success: false, message: 'Access denied' });
+
+    const targetUserId = req.params.id;
+    const isOwner = req.user.id === targetUserId;
+
+    const targetUser = await User.findById(targetUserId);
+    if (!targetUser) {
+      return res.status(404).json({ success: false, message: 'User not found' });
     }
 
-    // Security: Don't allow password update here
+    const myLevel = getRoleRank(req.user.role);
+    const targetLevel = getRoleRank(targetUser.role);
+
+    // You can update others only if your level is higher than target user.
+    if (!isOwner && myLevel <= targetLevel) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied: You cannot modify profiles of users at your level or higher.'
+      });
+    }
+
+    if (req.body.role) {
+      if (!hasPermission(req.user.role, 'assign_roles')) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied: You do not have permission to assign roles.'
+        });
+      }
+
+      const newRoleLevel = getRoleRank(req.body.role);
+      if (!newRoleLevel) {
+        return res.status(400).json({ success: false, message: 'Invalid target role' });
+      }
+
+      // Users cannot change their own role.
+      if (isOwner) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied: You cannot change your own role.'
+        });
+      }
+
+      // You cannot assign a role equal to or above your own level (except root).
+      if (myLevel <= newRoleLevel && !hasPermission(req.user.role, 'all')) {
+        return res.status(403).json({
+          success: false,
+          message: `Access denied: You cannot assign '${req.body.role}' role beyond your authority level.`
+        });
+      }
+    }
+
+    // Password updates must go through the dedicated password endpoint.
     if (req.body.password) {
       delete req.body.password;
     }
 
-    if (req.body.role && !isAdmin) {
-      return res.status(403).json({ success: false, message: 'Only admins can change roles' });
-    }
-
     req.body.updatedBy = req.user._id;
-    
-    const user = await User.findByIdAndUpdate(
-      req.params.id,
+
+    const updatedUser = await User.findByIdAndUpdate(
+      targetUserId,
       req.body,
       { new: true, runValidators: true }
     ).select('-password');
-    
-    if (!user) {
-      return res.status(404).json({ success: false, message: 'User not found' });
-    }
+
     res.status(200).json({
       success: true,
-      data: user,
-      message: 'User updated successfully'
+      data: updatedUser,
+      message: 'User profile updated successfully'
     });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
   }
 };
 
-
+// Change password for self or admin-level users.
 exports.simplePasswordUpdate = async (req, res) => {
   try {
     const { newPassword } = req.body;
-    const targetUserId = req.params.id; // The ID from the URL /:id
+    const targetUserId = req.params.id;
 
-    // Check: Is the person logged in the Owner OR an Admin?
     const isOwner = req.user.id === targetUserId;
-    const isAdmin = req.user.role === 'admin' || req.user.role === 'root';
+    const isAdmin = ['admin', 'superuser', 'root'].includes(req.user.role);
 
     if (!isOwner && !isAdmin) {
-      return res.status(403).json({ 
-        success: false, 
-        message: "Access Denied: You can only change your own password (unless you are an Admin)" 
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied: You can only change your own password unless you are admin-level.'
       });
     }
 
-    // Find the actual user being targeted
     const user = await User.findById(targetUserId);
-    if (!user) {
-      return res.status(404).json({ success: false, message: "User not found" });
-    }
-
-    user.password = newPassword;
-    await user.save(); // Triggers hashing hook
-
-    res.status(200).json({ success: true, message: "Password updated successfully!" });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-
-
-
-// // updatec password
-// exports.simplePasswordUpdate = async (req, res) => {
-//   try {
-//     const { newPassword } = req.body;
-    
-//     // 1. Find the user
-//     const user = await User.findById(req.user.id);
-
-//     if (!user) {
-//       return res.status(404).json({ success: false, message: "User not found" });
-//     }
-//     // 2. Simply assign the new password
-//     // This triggers the .pre('save') hook in your Model to hash it automatically!
-//     user.password = newPassword;
-//     await user.save();
-
-//     res.status(200).json({ success: true, message: "Password updated successfully!" });
-//   } catch (error) {
-//     res.status(500).json({ success: false, message: error.message });
-//   }
-// };
-
-
-// 6. DELETE USER
-exports.deleteUser = async (req, res) => {
-  try {
-    const user = await User.findByIdAndDelete(req.params.id);
     if (!user) {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
-    res.status(200).json({ success: true, message: 'User deleted successfully' });
+
+    user.password = newPassword;
+    await user.save();
+
+    res.status(200).json({ success: true, message: 'Password updated successfully' });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
 };
 
+// Delete user only if requester has higher authority than target user.
+exports.deleteUser = async (req, res) => {
+  try {
+    const targetUserId = req.params.id;
+    const targetUser = await User.findById(targetUserId);
 
+    if (!targetUser) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
 
+    const myLevel = getRoleRank(req.user.role);
+    const targetLevel = getRoleRank(targetUser.role);
 
+    if (myLevel <= targetLevel && !hasPermission(req.user.role, 'all')) {
+      return res.status(403).json({
+        success: false,
+        message: `Access denied: You cannot delete a '${targetUser.role}' user beyond your authority level.`
+      });
+    }
 
-
-
-
-
-// const User = require('../models/User');
-// const bcryptjs = require('bcryptjs');
-
-// // Get all users
-// exports.getAllUsers = async (req, res) => {
-//   try {
-//     const users = await User.find().select('-password');
-//     res.status(200).json({
-//       success: true,
-//       data: users
-//     });
-//   } catch (error) {
-//     res.status(500).json({
-//       success: false,
-//       message: error.message
-//     });
-//   }
-// };
-
-
-// // Get user by ID
-// exports.getUserById = async (req, res) => {
-//   try {
-//     const user = await User.findById(req.params.id).select('-password');
-//     if (!user) {
-//       return res.status(404).json({
-//         success: false,
-//         message: 'User not found'
-//       });
-//     }
-//     res.status(200).json({
-//       success: true,
-//       data: user
-//     });
-//   } catch (error) {
-//     res.status(500).json({
-//       success: false,
-//       message: error.message
-//     });
-//   }
-// };
-
-// // Create new user
-// exports.createUser = async (req, res) => {
-//   try {
-//     const user = new User(req.body);
-//     const savedUser = await user.save();
-//     res.status(201).json({
-//       success: true,
-//       data: {
-//         id: savedUser._id,
-//         name: savedUser.name,
-//         email: savedUser.email,
-//         role: savedUser.role
-//       },
-//       message: 'User created successfully'
-//     });
-//   } catch (error) {
-//     res.status(400).json({
-//       success: false,
-//       message: error.message
-
-//     });
-//   }
-// };
-
-
-// const User = require('../models/User');
-// const jwt = require('jsonwebtoken');
-// const bcryptjs = require('bcryptjs');
-
-// exports.loginUser = async (req, res) => {
-//   try {
-//     const { email, password } = req.body;
-
-//     // 1. Check if user exists
-//     const user = await User.findOne({ email });
-//     if (!user) {
-//       return res.status(401).json({ success: false, message: "Invalid Credentials" });
-//     }
-
-//     // 2. Compare Password
-//     const isMatch = await bcryptjs.compare(password, user.password);
-//     if (!isMatch) {
-//       return res.status(401).json({ success: false, message: "Invalid Credentials" });
-//     }
-
-//     // 3. Create Token
-//     const token = jwt.sign(
-//       { id: user._id, role: user.role },
-//       process.env.JWT_SECRET,
-//       { expiresIn: process.env.JWT_EXPIRES_IN }
-//     );
-
-//     res.status(200).json({
-//       success: true,
-//       token,
-//       user: {
-//         id: user._id,
-//         name: user.name,
-//         role: user.role
-//       }
-//     });
-//   } catch (error) {
-//     res.status(500).json({ success: false, message: error.message });
-//   }
-// };
-
-// // Update user
-// exports.updateUser = async (req, res) => {
-//   try {
-//     // Don't allow password update through this endpoint
-//     if (req.body.password) {
-//       delete req.body.password;
-//     }
-    
-//     const user = await User.findByIdAndUpdate(
-//       req.params.id,
-//       req.body,
-//       { new: true, runValidators: true }
-//     ).select('-password');
-    
-//     if (!user) {
-//       return res.status(404).json({
-//         success: false,
-//         message: 'User not found'
-//       });
-//     }
-//     res.status(200).json({
-//       success: true,
-//       data: user,
-//       message: 'User updated successfully'
-//     });
-//   } catch (error) {
-//     res.status(400).json({
-//       success: false,
-//       message: error.message
-//     });
-//   }
-// };
-
-// // Delete user
-// exports.deleteUser = async (req, res) => {
-//   try {
-//     const user = await User.findByIdAndDelete(req.params.id);
-//     if (!user) {
-//       return res.status(404).json({
-//         success: false,
-//         message: 'User not found'
-//       });
-//     }
-//     res.status(200).json({
-//       success: true,
-//       message: 'User deleted successfully'
-//     });
-//   } catch (error) {
-//     res.status(500).json({
-//       success: false,
-//       message: error.message
-//     });
-//   }
-// };
+    await User.findByIdAndDelete(targetUserId);
+    res.status(200).json({ success: true, message: `User (${targetUser.role}) deleted successfully` });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
