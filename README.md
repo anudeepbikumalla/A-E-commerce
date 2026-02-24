@@ -1,6 +1,15 @@
 # A-E-commerce API
 
-A backend API for e-commerce workflows built with Node.js, Express, MongoDB, and JWT auth.
+A role-based e-commerce backend built with Node.js, Express, MongoDB (Mongoose), and JWT authentication.
+
+## What This Project Solves
+This API provides:
+- user identity and role-based access control (RBAC)
+- product catalog management with ownership controls
+- order lifecycle management with stock-safe creation
+- password management (self update + forgot/reset flow)
+
+The design focuses on predictable authorization, secure credential handling, and clear request validation.
 
 ## Tech Stack
 - Node.js (CommonJS)
@@ -8,181 +17,213 @@ A backend API for e-commerce workflows built with Node.js, Express, MongoDB, and
 - MongoDB + Mongoose
 - JWT (`jsonwebtoken`)
 - Password hashing (`bcryptjs`)
-- Node test runner (`node:test`)
+- Test runner (`node:test`)
 
 ## Project Structure
-- `server.js`: app bootstrap, middleware, route mounting, error handler, server start
+- `server.js`: app bootstrap and middleware wiring
 - `config/dbConfig.js`: MongoDB connection
-- `config/rolesConfig.js`: role hierarchy with rank + permissions
-- `routes/*.js`: endpoint declarations and middleware chaining
-- `middleware/authMiddleware.js`: JWT verification and user hydration (`req.user`)
-- `middleware/permissionMiddleware.js`: permission guard (`checkPermission(...)`)
-- `middleware/validateObjectId.js`: ObjectId validation for route params
-- `middleware/validateBody.js`: request body validation for auth/user/product/order endpoints
-- `utils/rbac.js`: shared role rank + permission helpers
-- `controllers/*.js`: business logic
-- `models/*.js`: schema definitions
-- `tests/rbac.integration.test.js`: integration smoke test for RBAC/auth/order flows
+- `config/rolesConfig.js`: role rank + permissions
+- `routes/*.js`: endpoint maps and middleware order
+- `middleware/authMiddleware.js`: JWT verification and `req.user`
+- `middleware/permissionMiddleware.js`: permission checks (`checkPermission`)
+- `middleware/validateObjectId.js`: ObjectId route param validation
+- `middleware/validateBody.js`: body validation by endpoint type
+- `utils/rbac.js`: shared role/permission helper utilities
+- `controllers/*.js`: business logic and policy enforcement
+- `models/*.js`: persistence schemas
+- `tests/rbac.integration.test.js`: integration smoke tests
 
-## Architecture (High Level)
-The API uses a layered flow:
+## Architecture and Design Decisions
 
-1. Request enters Express app.
-2. Route matches endpoint.
-3. Middleware stack runs:
-   - input validation
-   - authentication
-   - authorization
-4. Controller executes business logic.
-5. Model layer validates/persists data.
-6. API returns JSON response.
+### 1. Layered Request Pipeline
+Decision:
+- enforce security and validation before controller logic.
+
+Implementation:
+1. Route match
+2. Input validation middleware
+3. Auth middleware
+4. Permission middleware
+5. Controller business logic
+6. DB operations
+7. JSON response
+
+Why:
+- keeps controller logic focused
+- reduces duplicated validation checks
+- fails fast on malformed/unauthorized requests
+
+### 2. Dual Authorization Model (Route + Controller)
+Decision:
+- use route-level permission checks and controller-level ownership/rank checks.
+
+Implementation:
+- route: `checkPermission(...)`
+- controller: ownership (`resource.createdBy`/`order.user`) + hierarchy checks using role rank
+
+Why:
+- route permissions guard broad access
+- controller checks protect resource-level boundaries
+- prevents accidental overexposure from route-only rules
+
+### 3. Centralized RBAC Source
+Decision:
+- keep role definitions in one place.
+
+Implementation:
+- `config/rolesConfig.js` defines rank + permissions
+- `utils/rbac.js` reads and evaluates role capabilities
+
+Why:
+- avoids role logic drift across files
+- makes role updates easier and safer
+
+### 4. Transactional Order Placement
+Decision:
+- place orders inside a DB transaction when stock is affected.
+
+Implementation:
+- start session
+- atomically check/decrement stock
+- create order with price snapshot
+- commit/rollback transaction
+
+Why:
+- prevents overselling under concurrent requests
+- keeps stock and order data consistent
+
+### 5. Secure Password Handling
+Decision:
+- never store plain passwords, never expose passwords.
+
+Implementation:
+- `User` pre-save hook hashes password
+- self password update requires `currentPassword`
+- forgot/reset uses random token with hashed token storage + expiry
+
+Why:
+- protects credentials at rest
+- lowers risk of account takeover
+- supports one-time reset flow
 
 ## End-to-End Feature Flows
 
-### 1. Signup and Login
+### Signup (`POST /api/users`)
+1. Validate `name`, `email`, `password`
+2. Check duplicate email
+3. Create user with default role `user`
+4. Password hash on save
+5. Return user summary
 
-Signup (`POST /api/users`):
-1. Request body is validated (`name`, `email`, `password`).
-2. Controller checks if user already exists.
-3. User is created with default role `user`.
-4. Password is hashed by `User` model pre-save hook.
-5. API returns created user (without password).
+### Login (`POST /api/users/login`)
+1. Validate `email`, `password`
+2. Find user by email
+3. Compare password hash
+4. Issue JWT (`id`, `role`)
+5. Return token + user summary
 
-Login (`POST /api/users/login`):
-1. Request body is validated (`email`, `password`).
-2. Controller finds user by email.
-3. Password is compared with hashed password.
-4. JWT is generated with `{ id, role }`.
-5. API returns token + basic user info.
+### Protected Request Flow
+1. `Authorization: Bearer <token>`
+2. JWT verify + user load (`authMiddleware`)
+3. Permission check (`checkPermission`)
+4. Controller ownership/hierarchy checks
+5. Business operation and response
 
-### 2. Authentication (Protected Routes)
+### User Profile / Management
+- `GET /api/users/:id`: owner or user-management/read role
+- `PUT /api/users/:id`: hierarchy-aware update, controlled role assignment
+- `DELETE /api/users/:id`: requester must outrank target (except root)
 
-For protected routes:
-1. `authMiddleware` checks `Authorization: Bearer <token>`.
-2. JWT is verified with `JWT_SECRET`.
-3. User is loaded from DB and attached to `req.user`.
-4. If token/user invalid, request is rejected with `401`.
+### Password Update (`POST /api/users/update-password/:id`)
+- self: must provide correct `currentPassword`
+- admin-level roles: can reset without current password
+- new password is hashed via model hook
 
-### 3. Authorization (RBAC)
+### Forgot Password (`POST /api/users/forgot-password`)
+1. Validate email
+2. Generate random reset token
+3. Store only hashed token + expiry
+4. Return success
 
-Authorization uses permissions from `rolesConfig`:
-1. Route applies `checkPermission('permA', 'permB', ...)`.
-2. Middleware loads role config from `utils/rbac`.
-3. Access is granted if role has any required permission.
-4. `root` has `all` permission and bypasses checks.
-5. Controllers also enforce resource-level rules (ownership/hierarchy).
+### Reset Password (`POST /api/users/reset-password`)
+1. Validate `token`, `newPassword`
+2. Hash incoming token and verify non-expired token record
+3. Update user password
+4. Delete reset tokens for that user
 
-### 4. User Profile and User Management
+Note:
+- In this simple implementation, raw reset token is returned for testing. In production, deliver via email/SMS and do not return it in API response.
 
-Get profile (`GET /api/users/:id`):
-1. Auth + permission middleware runs.
-2. Controller allows:
-   - owner access, or
-   - roles with `read_users/manage_users`.
-3. Password is excluded from response.
+### Product Management
+- Public read: `GET /products`, `GET /products/:id`
+- Protected write: create/update/delete
+- Controller enforces owner-or-elevated rule
+- `createdBy` cannot be replaced by request payload
 
-Update user (`PUT /api/users/:id`):
-1. Body and ObjectId are validated.
-2. Controller applies hierarchy checks by role rank.
-3. Role assignment allowed only for roles with `assign_roles`.
-4. Self role-change is blocked.
-5. Password updates are blocked in this endpoint.
+### Order Management
+- `GET /orders`, `GET /orders/:id`: global roles see broader scope; others are owner-scoped
+- `POST /orders`: transactional order placement and stock decrement
+- `PUT /orders/:id`: `manage_orders` only
+- `PUT /orders/:id/status`: validated status, delivery role limited to `delivered`
+- `DELETE /orders/:id`: management roles or owner fallback policy
 
-Delete user (`DELETE /api/users/:id`):
-1. Auth + permission + ObjectId validation.
-2. Controller checks requester rank > target rank (except root).
-3. Target user is deleted if authorized.
+## RBAC Matrix (Core)
 
-### 5. Password Update (Authenticated User/Admin)
+| Role | read_users | manage_users | assign_roles | manage_products | manage_orders | update_order_status |
+|---|---:|---:|---:|---:|---:|---:|
+| `user` | No | No | No | No | No | No |
+| `support` | Yes | No | No | No | No | No |
+| `delivery` | No | No | No | No | No | Yes |
+| `vendor` | No | No | No | Own only via controller checks | No | No |
+| `manager` | No | No | Yes | Yes | Yes | No |
+| `admin` | Yes | Yes | Yes | Yes | Yes | No |
+| `superuser` | Yes | Yes | Yes | Yes | Yes | No |
+| `root` | Yes (all) | Yes (all) | Yes (all) | Yes (all) | Yes (all) | Yes (all) |
 
-Endpoint: `POST /api/users/update-password/:id`
+## Validation and Error Handling
 
-1. Body is validated (`newPassword`; `currentPassword` required for self-change).
-2. Controller allows:
-   - self update, or
-   - admin/superuser/root reset.
-3. For self update, current password must match.
-4. New password is saved and hashed by model hook.
+### Input Validation
+- `validateObjectId`: validates route IDs
+- `validateBody`: validates payload shape and required fields
 
-### 6. Forgot/Reset Password (Public Flow)
+### Error Contract
+Typical error response:
+```json
+{
+  "success": false,
+  "message": "Readable error message"
+}
+```
 
-Forgot password (`POST /api/users/forgot-password`):
-1. Body is validated (`email`).
-2. If account exists, system generates random reset token.
-3. Only hashed token is stored in `tokens` collection with expiry.
-4. Existing reset tokens for that user are cleared.
-5. API returns success.
+Common status codes:
+- `400` invalid input
+- `401` authentication failure
+- `403` permission/ownership/hierarchy denied
+- `404` resource not found
+- `409` business conflict (for example insufficient stock)
+- `500` unhandled server error
 
-Reset password (`POST /api/users/reset-password`):
-1. Body is validated (`token`, `newPassword`).
-2. Incoming token is hashed and matched against non-expired stored token.
-3. Matching user password is updated (hashed on save).
-4. User reset tokens are deleted (one-time use).
-5. User can now login with new password.
+## Testing Strategy
 
-Note: In this simple setup, reset token is returned in API response for testing. In production, send token via email/SMS and do not return it in API response.
+### Commands
+```bash
+npm test
+npm run test:rbac
+```
 
-### 7. Product Management
-
-Public reads:
-- `GET /api/products`
-- `GET /api/products/:id`
-
-Protected writes:
-- `POST /api/products`
-- `PUT /api/products/:id`
-- `DELETE /api/products/:id`
-
-Write flow:
-1. Body/ObjectId validation.
-2. Auth + permission check.
-3. Controller enforces ownership or elevated permission.
-4. `createdBy` cannot be overwritten in update.
-5. `updatedBy` is set from logged-in user.
-
-### 8. Order Management
-
-List/get orders:
-- `GET /api/orders`
-- `GET /api/orders/:id`
-
-Behavior:
-1. Auth + permission check.
-2. Controller returns all orders for roles with global read/manage permissions.
-3. Other users can access only their own orders.
-
-Create order (`POST /api/orders`):
-1. Body validation (`products`, `shippingAddress`).
-2. Transaction starts.
-3. Product stock is checked and decremented atomically.
-4. Order total is calculated from DB prices.
-5. Order is created and transaction commits.
-6. If stock is insufficient, request fails with conflict.
-
-Update order (`PUT /api/orders/:id`):
-- Allowed only for roles with `manage_orders`.
-
-Update order status (`PUT /api/orders/:id/status`):
-1. Status value is validated.
-2. Delivery role can set only `delivered`.
-3. Status field is updated.
-
-Delete order (`DELETE /api/orders/:id`):
-- Allowed for `manage_orders` roles, or owner fallback where applicable.
-
-### 9. Validation Layer
-
-Validation middleware protects routes before business logic:
-- `validateObjectId`: checks route params like `:id`.
-- `validateBody`: checks required fields/types for auth/user/product/order requests.
-
-This reduces controller complexity and returns early `400` on invalid input.
+### Current Coverage (Integration Smoke)
+- owner vs non-owner user profile access
+- role-based order list access
+- delivery-specific status constraints
+- product ownership mutation restrictions
+- password update guardrails
+- forgot/reset password flow
 
 ## API Base URL
 - `http://localhost:3000/api`
 
 ## Environment Variables
-Create a `.env` file:
+Create `.env`:
 
 ```env
 PORT=3000
@@ -197,41 +238,16 @@ npm install
 npm start
 ```
 
-## Testing
-Run all tests:
-```bash
-npm test
-```
-
-Run RBAC integration smoke test only:
-```bash
-npm run test:rbac
-```
-
-Current integration test covers:
-- owner vs non-owner profile access
-- role-based order access
-- delivery status restrictions
-- product ownership restrictions
-- password change guardrails
-- forgot/reset password flow
-
-## Security Notes
-- Passwords are always stored as hashes.
-- API never has a "find password" endpoint.
-- Reset tokens are stored as hashes with expiry.
-- RBAC is permission-based and centralized.
-
 ## Production Notes
-- Do not return `resetToken` in `forgot-password` response in production.
-- Deliver reset links/tokens through email or SMS provider.
-- Add rate limiting for login, forgot-password, and reset-password endpoints.
-- Add audit logging for role changes, password resets, and user deletion actions.
+- Do not return reset tokens in forgot-password responses.
+- Integrate email/SMS provider for reset delivery.
+- Add rate limiting on auth endpoints.
+- Add audit logging for admin-level actions.
 
 ## Known Limitations
-- External email/SMS delivery is not integrated yet for password reset.
-- Token/session revocation flow is not implemented yet (future enhancement).
-- Current integration tests are smoke-level, not a full endpoint matrix.
+- No external notification integration yet for reset flow.
+- No token/session revocation flow yet.
+- Tests are smoke-level, not full endpoint matrix.
 
 ## Postman
 - Collection: `A-E-commerce.postman_collection.json`
