@@ -1,9 +1,9 @@
-﻿{
+{
   "info": {
     "_postman_id": "c2ad7d75-3c47-4c8f-bd2a-7aebc4d7a3a9",
-    "name": "A-E-commerce API",
+    "name": "Bikku's Store Backend API",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
-    "description": "Collection for A-E-commerce API with role-based examples and auto token handling."
+    "description": "Collection for Bikku's Store Backend API with role-based examples and auto token handling."
   },
   "item": [
     {
@@ -466,3 +466,4 @@
     { "key": "orderId", "value": "" }
   ]
 }
+

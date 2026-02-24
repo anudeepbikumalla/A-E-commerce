@@ -1,4 +1,4 @@
-# A-E-commerce API
+# Bikku's Store Backend API
 
 A role-based e-commerce backend built with Node.js, Express, MongoDB (Mongoose), and JWT authentication.
 
@@ -250,5 +250,5 @@ npm start
 - Tests are smoke-level, not full endpoint matrix.
 
 ## Postman
-- Collection: `A-E-commerce.postman_collection.json`
-- Environment: `A-E-commerce.postman_environment.json`
+- Collection: `Bikku-Store-Backend.postman_collection.json`
+- Environment: `Bikku-Store-Backend.postman_environment.json`
